@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <title>Universal Front-Camera QR Scanner</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    html,
+    body {
+      margin: 0;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: #111;
+      color: #eee;
+      font-family: sans-serif
+    }
+
+    video {
+      width: 90vmin;
+      max-width: 480px;
+      border-radius: 12px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, .4)
+    }
+
+    #msg {
+      margin-top: 1rem;
+      text-align: center;
+      font-size: 1.1rem
+    }
+
+    select {
+      margin-top: .5rem;
+      padding: .3rem .5rem;
+      font-size: 1rem;
+      border-radius: 6px;
+      border: none
+    }
+  </style>
+</head>
+
+<body>
+  <video id="video" playsinline autoplay muted></video>
+  <select id="cameraSelect" hidden></select>
+  <p id="msg">Grant camera permission…</p>
+
+  <!-- ZXing fallback (only loads when needed) -->
+  <script type="module">
+    const video = document.getElementById('video');
+    const msg = document.getElementById('msg');
+    const camSel = document.getElementById('cameraSelect');
+
+    // -------- 1. Open the front camera, or any camera if that fails ----------
+    async function openStream(deviceId) {
+      const constraints = deviceId
+        ? { video: { deviceId: { exact: deviceId } } }
+        : { video: { facingMode: { ideal: 'user' } } };   // "front" request
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        video.srcObject = stream;
+        await video.play();
+        return stream;
+      } catch (err) {
+        if (!deviceId && err.name === 'OverconstrainedError') {
+          // try again without facingMode (Surface quirk)
+          return openStream(null);
+        }
+        throw err;
+      }
+    }
+
+    // -------- 2. Enumerate cameras so user can switch (tablets, laptops) -----
+    async function populateCameraList() {
+      const devices = (await navigator.mediaDevices.enumerateDevices())
+        .filter(d => d.kind === 'videoinput');
+      if (devices.length <= 1) { camSel.hidden = true; return; }
+
+      camSel.innerHTML = '';
+      devices.forEach(d => {
+        const opt = document.createElement('option');
+        opt.value = d.deviceId;
+        opt.textContent = d.label || `Camera ${camSel.length + 1}`;
+        camSel.appendChild(opt);
+      });
+      camSel.hidden = false;
+    }
+
+    // -------- 3. QR decoding loop (BarcodeDetector → ZXing fallback) --------
+    async function startDecode() {
+      if ('BarcodeDetector' in window) {
+        const detector = new BarcodeDetector({ formats: ['qr_code'] });
+        async function loop() {
+          try {
+            const codes = await detector.detect(video);
+            if (codes.length) {
+              handleResult(codes[0].rawValue);
+              return;
+            }
+          } catch (e) { /* ignore frame errors */ }
+          requestAnimationFrame(loop);
+        }
+        loop();
+      } else {
+        // dynamic import to keep initial bundle tiny
+        const { BrowserMultiFormatReader } = await import('https://esm.run/@zxing/library@0.20.0');
+        const reader = new BrowserMultiFormatReader();
+        reader.decodeFromVideoElement(video, (result, err) => {
+          if (result) handleResult(result.getText());
+        });
+      }
+    }
+
+    function handleResult(text) {
+      msg.textContent = `QR value: ${text}`;
+      navigator.vibrate?.(200);
+      // Stop the stream after a successful scan (optional)
+      // video.srcObject?.getTracks().forEach(t=>t.stop());
+    }
+
+    // -------- 4. Initialise --------------------------------------------------
+    (async () => {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        msg.textContent = 'Sorry, camera access not supported in this browser.';
+        return;
+      }
+      try {
+        const stream = await openStream();   // front cam attempt
+        await populateCameraList();
+        startDecode();
+        msg.textContent = 'Point the QR toward the camera';
+      } catch (e) {
+        msg.textContent = `Error: ${e.message}`;
+      }
+    })();
+
+    // -------- 5. User camera switch handler ---------------------------------
+    camSel.addEventListener('change', async e => {
+      video.srcObject?.getTracks().forEach(t => t.stop()); // close old stream
+      msg.textContent = 'Switching camera…';
+      try {
+        await openStream(e.target.value);
+        msg.textContent = 'Point the QR toward the camera';
+      } catch (err) {
+        msg.textContent = `Error: ${err.message}`;
+      }
+      startDecode();
+    });
+
+    // -------- 6. Re-connect after tab / PWA resumes (iOS quirk) -------------
+    document.addEventListener('visibilitychange', async () => {
+      if (document.visibilityState === 'visible' && !video.srcObject) {
+        msg.textContent = 'Re-initialising camera…';
+        try {
+          await openStream();
+          startDecode();
+          msg.textContent = 'Point the QR toward the camera';
+        } catch (e) {
+          msg.textContent = `Error: ${e.message}`;
+        }
+      }
+    });
+  </script>
+</body>
+
+</html>
