@@ -11,6 +11,7 @@ const QrScanner = ({ onDecode, stopOnScan = false }) => {
 
 	const populateCameras = async () => {
 		try {
+			console.log('getCameras');
 			const devices = await Html5Qrcode.getCameras();
 			setCameras(devices);
 
