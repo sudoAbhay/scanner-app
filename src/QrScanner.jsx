@@ -6,6 +6,7 @@ const QrScanner = ({ onDecode, stopOnScan = false }) => {
 	const qrRef = useRef(null);
 	const scanningRef = useRef(false);
 	const [message, setMessage] = useState('Grant camera permission…');
+	const [error, setError] = useState('');
 	const [cameras, setCameras] = useState([]);
 	const [activeId, setActiveId] = useState(undefined);
 
@@ -14,6 +15,7 @@ const QrScanner = ({ onDecode, stopOnScan = false }) => {
 			console.log('getCameras');
 			const devices = await Html5Qrcode.getCameras();
 			setCameras(devices);
+			setError(''); // Clear any previous errors
 
 			if (!activeId && devices.length) {
 				const frontLike = devices.find((d) => /front|user|selfie/i.test(d.label));
@@ -21,6 +23,7 @@ const QrScanner = ({ onDecode, stopOnScan = false }) => {
 			}
 		} catch (err) {
 			console.warn('Unable to enumerate cameras', err);
+			setError(`Camera enumeration failed: ${err.message}`);
 		}
 	};
 
@@ -42,6 +45,7 @@ const QrScanner = ({ onDecode, stopOnScan = false }) => {
 			);
 			scanningRef.current = true;
 			setMessage('Point the QR code toward the camera');
+			setError(''); // Clear any previous errors
 		} catch (err) {
 			if (!deviceId && err.name === 'OverconstrainedError') {
 				const devices = await Html5Qrcode.getCameras();
@@ -51,7 +55,8 @@ const QrScanner = ({ onDecode, stopOnScan = false }) => {
 					return start(frontLike.id);
 				}
 			}
-			setMessage('Camera error: ' + err.message);
+			setError(`Camera error: ${err.message}`);
+			setMessage('Camera failed to start');
 		}
 	};
 
@@ -77,6 +82,7 @@ const QrScanner = ({ onDecode, stopOnScan = false }) => {
 			}
 		} catch (err) {
 			console.warn('Cannot stop scanner', err);
+			setError(`Failed to stop scanner: ${err.message}`);
 		}
 	};
 
@@ -138,6 +144,22 @@ const QrScanner = ({ onDecode, stopOnScan = false }) => {
 				</select>
 			)}
 			<p style={{ color: '#333', textAlign: 'center' }}>{message}</p>
+			{error && (
+				<p
+					style={{
+						color: '#dc2626',
+						textAlign: 'center',
+						fontWeight: 'bold',
+						marginTop: '8px',
+						padding: '8px',
+						backgroundColor: '#fef2f2',
+						border: '1px solid #fecaca',
+						borderRadius: '4px',
+					}}
+				>
+					{error}
+				</p>
+			)}
 		</div>
 	);
 };
