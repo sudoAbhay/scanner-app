@@ -1,14 +1,19 @@
 import { useEffect, useRef, useState, useId, useCallback, useMemo } from 'react';
 import { Html5Qrcode, Html5QrcodeScannerState } from 'html5-qrcode';
+import { useNavigate } from 'react-router-dom';
 
 /**
  * Self-contained QR Scanner component that exclusively uses the front camera
  * Handles QR code detection and display internally without requiring external props
  */
 const QrScanner = () => {
+	const navigate = useNavigate();
 	const regionId = `qr-region-${useId()}`;
 	const qrRef = useRef(null);
 	const scanningRef = useRef(false);
+	const mountedRef = useRef(true);
+	const initializingRef = useRef(false);
+	const stoppingRef = useRef(false);
 
 	// Component state
 	const [message, setMessage] = useState('Initializing front camera...');
@@ -26,7 +31,6 @@ const QrScanner = () => {
 	 */
 	const getFrontCamera = useCallback(async () => {
 		try {
-			console.log('Searching for front camera...');
 			const devices = await Html5Qrcode.getCameras();
 
 			if (!devices.length) {
@@ -37,25 +41,74 @@ const QrScanner = () => {
 			const frontCamera = devices.find((device) => /front|user|selfie|facing.*user/i.test(device.label));
 
 			if (frontCamera) {
-				console.log('Front camera found:', frontCamera.label);
 				return frontCamera.id;
 			}
 
 			// If no front camera found by label, try the first camera
 			// (on mobile devices, this is often the front camera)
-			console.warn('No front camera identified by label, using first available camera');
 			return devices[0].id;
 		} catch (err) {
-			console.error('Error accessing cameras:', err);
 			throw new Error(`Camera access failed: ${err.message}`);
 		}
 	}, []);
+
+	/**
+	 * Stop the QR scanner with proper cleanup
+	 */
+	const stopScanning = useCallback(async () => {
+		if (!qrRef.current || stoppingRef.current) return;
+
+		try {
+			stoppingRef.current = true;
+			scanningRef.current = false;
+
+			const state = qrRef.current.getState?.();
+
+			if (state === Html5QrcodeScannerState.SCANNING || state === Html5QrcodeScannerState.PAUSED) {
+				// Stop the scanner first
+				await qrRef.current.stop();
+
+				// Clear the scanner to release video resources
+				await qrRef.current.clear();
+			}
+
+			// Additional cleanup: stop all video tracks
+			try {
+				const videoElement = document.querySelector(`#${regionId} video`);
+				if (videoElement && videoElement.srcObject) {
+					const stream = videoElement.srcObject;
+					const tracks = stream.getTracks();
+					tracks.forEach((track) => {
+						track.stop();
+					});
+					videoElement.srcObject = null;
+				}
+			} catch (cleanupErr) {
+				// Silent cleanup error
+			}
+
+			// Only update state if component is still mounted
+			if (mountedRef.current) {
+				setIsScanning(false);
+			}
+		} catch (err) {
+			// Don't set error state if component is unmounted
+			if (mountedRef.current) {
+				setError(`Failed to stop scanner: ${err.message}`);
+			}
+		} finally {
+			stoppingRef.current = false;
+		}
+	}, [regionId]);
 
 	/**
 	 * Handle QR code detection
 	 */
 	const handleQrDecode = useCallback(
 		(decodedText) => {
+			// Only update state if component is still mounted
+			if (!mountedRef.current) return;
+
 			setDecodedValue(decodedText);
 			setMessage(`QR Code Successfully Scanned!`);
 			setIsScanning(false);
@@ -77,9 +130,10 @@ const QrScanner = () => {
 	 * Start the QR scanner with front camera
 	 */
 	const startScanning = useCallback(async () => {
-		if (!qrRef.current || scanningRef.current) return;
+		if (!qrRef.current || scanningRef.current || initializingRef.current || !mountedRef.current) return;
 
 		try {
+			initializingRef.current = true;
 			setMessage('Starting front camera...');
 			setError('');
 			setDecodedValue('');
@@ -91,6 +145,12 @@ const QrScanner = () => {
 				throw new Error('Front camera not available');
 			}
 
+			// Check if scanner is already in a scanning state
+			const currentState = qrRef.current.getState?.();
+			if (currentState === Html5QrcodeScannerState.SCANNING) {
+				return;
+			}
+
 			await qrRef.current.start(
 				frontCameraId,
 				{
@@ -100,58 +160,44 @@ const QrScanner = () => {
 				handleQrDecode,
 				(errorMessage) => {
 					// Handle scan errors silently (this fires frequently during scanning)
-					console.debug('Scan error:', errorMessage);
 				},
 			);
 
 			scanningRef.current = true;
 			setMessage('Point QR code toward the front camera');
 		} catch (err) {
-			console.error('Failed to start scanner:', err);
-			setError(`Camera error: ${err.message}`);
-			setMessage('Failed to start front camera');
-			setIsScanning(false);
+			// Only update state if component is still mounted
+			if (mountedRef.current) {
+				setError(`Camera error: ${err.message}`);
+				setMessage('Failed to start front camera');
+				setIsScanning(false);
+			}
 			scanningRef.current = false;
+		} finally {
+			initializingRef.current = false;
 		}
 	}, [getFrontCamera, handleQrDecode, scannerConfig]);
-
-	/**
-	 * Stop the QR scanner
-	 */
-	const stopScanning = useCallback(async () => {
-		if (!qrRef.current || !scanningRef.current) return;
-
-		try {
-			const state = qrRef.current.getState?.();
-
-			if (state === Html5QrcodeScannerState.SCANNING || state === Html5QrcodeScannerState.PAUSED) {
-				await qrRef.current.stop();
-				await qrRef.current.clear();
-			}
-
-			scanningRef.current = false;
-			setIsScanning(false);
-		} catch (err) {
-			console.warn('Error stopping scanner:', err);
-			setError(`Failed to stop scanner: ${err.message}`);
-		}
-	}, []);
 
 	/**
 	 * Restart scanning
 	 */
 	const restartScanning = useCallback(async () => {
 		await stopScanning();
+		// Add delay to ensure cleanup is complete
 		setTimeout(() => {
-			startScanning();
-		}, 500);
+			if (mountedRef.current) {
+				startScanning();
+			}
+		}, 1500);
 	}, [stopScanning, startScanning]);
 
 	/**
 	 * Handle visibility change to restart camera when tab becomes visible
 	 */
 	const handleVisibilityChange = useCallback(async () => {
-		if (document.visibilityState === 'visible' && !scanningRef.current && isScanning) {
+		if (!mountedRef.current) return;
+
+		if (document.visibilityState === 'visible' && !scanningRef.current && isScanning && !initializingRef.current) {
 			setMessage('Restarting front camera...');
 			await startScanning();
 		} else if (document.visibilityState === 'hidden' && scanningRef.current) {
@@ -163,6 +209,15 @@ const QrScanner = () => {
 	 * Initialize scanner on component mount
 	 */
 	useEffect(() => {
+		// Prevent multiple initializations
+		if (qrRef.current) {
+			return;
+		}
+
+		mountedRef.current = true;
+		initializingRef.current = false;
+		stoppingRef.current = false;
+
 		// Initialize HTML5 QR code scanner
 		qrRef.current = new Html5Qrcode(regionId, {
 			verbose: false,
@@ -177,8 +232,16 @@ const QrScanner = () => {
 
 		// Cleanup on unmount
 		return () => {
+			mountedRef.current = false;
+			initializingRef.current = false;
 			document.removeEventListener('visibilitychange', handleVisibilityChange);
-			stopScanning();
+
+			// Ensure scanner is stopped before component unmounts
+			if (qrRef.current && scanningRef.current) {
+				stopScanning().catch((err) => {
+					// Silent cleanup error
+				});
+			}
 		};
 	}, [startScanning, stopScanning, handleVisibilityChange, regionId]);
 
@@ -191,8 +254,53 @@ const QrScanner = () => {
 				gap: 16,
 				padding: '20px',
 				fontFamily: 'system-ui, -apple-system, sans-serif',
+				position: 'relative',
 			}}
 		>
+			{/* Back Button */}
+			<button
+				onClick={() => navigate('/')}
+				style={{
+					position: 'absolute',
+					top: '20px',
+					left: '20px',
+					display: 'flex',
+					alignItems: 'center',
+					gap: '8px',
+					fontSize: '18px',
+					color: '#374151',
+					background: 'rgba(255, 255, 255, 0.9)',
+					border: 'none',
+					cursor: 'pointer',
+					padding: '12px 16px',
+					borderRadius: '8px',
+					transition: 'all 0.2s ease',
+					boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+					zIndex: 10,
+				}}
+				onMouseEnter={(e) => {
+					e.target.style.backgroundColor = 'rgba(255, 255, 255, 1)';
+					e.target.style.transform = 'translateY(-1px)';
+				}}
+				onMouseLeave={(e) => {
+					e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.9)';
+					e.target.style.transform = 'translateY(0)';
+				}}
+			>
+				<svg
+					width='20'
+					height='20'
+					viewBox='0 0 24 24'
+					fill='none'
+					stroke='currentColor'
+					strokeWidth='2'
+					strokeLinecap='round'
+					strokeLinejoin='round'
+				>
+					<path d='M19 12H5M12 19l-7-7 7-7' />
+				</svg>
+				Back
+			</button>
 			<div
 				id={regionId}
 				className='qr-scanner-region'
