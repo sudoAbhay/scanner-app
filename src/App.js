@@ -7,7 +7,8 @@ function App() {
 	return (
 		<div style={{ padding: 20 }}>
 			<h1>QR Scanner</h1>
-			<QrScanner onDecode={(text) => setValue(text)} stopOnScan={false} />
+			{/* <QrScanner onDecode={(text) => setValue(text)} stopOnScan={false} /> */}
+			<QrScanner />
 			<div style={{ marginTop: 16 }}>
 				<strong>Last scan:</strong> {value || '—'}
 			</div>
