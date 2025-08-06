@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import QrScanner from './QrScanner';
 
 function App() {
-	const [value, setValue] = useState('');
+	const [value] = useState('');
 
 	return (
 		<div style={{ padding: 20 }}>

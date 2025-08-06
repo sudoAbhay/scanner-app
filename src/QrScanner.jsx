@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useId, useCallback } from 'react';
+import { useEffect, useRef, useState, useId, useCallback, useMemo } from 'react';
 import { Html5Qrcode, Html5QrcodeScannerState } from 'html5-qrcode';
 
 /**
@@ -16,8 +16,8 @@ const QrScanner = () => {
 	const [decodedValue, setDecodedValue] = useState('');
 	const [isScanning, setIsScanning] = useState(true);
 
-	// Internal configuration
-	const scannerConfig = { fps: 10, qrbox: 250 };
+	// Internal configuration - memoized to prevent re-creation on every render
+	const scannerConfig = useMemo(() => ({ fps: 10, qrbox: 250 }), []);
 	const stopOnScan = true;
 
 	/**
@@ -70,7 +70,7 @@ const QrScanner = () => {
 				stopScanning();
 			}
 		},
-		[stopOnScan],
+		[stopOnScan, stopScanning],
 	);
 
 	/**
